@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Independence Lab: mosaic and permutation test</title>
+<style>
+:root{--bg:#1a1d29;--panel:#242838;--ink:#eceff7;--mut:#9aa3bd;--line:#3a4058;--p:#ff7ab6;--t:#4fd1c5;--y:#f6c85f}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 "Trebuchet MS",Verdana,sans-serif}
+header{padding:18px 22px;border-bottom:1px solid var(--line)}
+h1{margin:0;font-size:1.35rem;letter-spacing:.02em}header p{margin:2px 0 0;color:var(--mut)}
+.wrap{display:grid;grid-template-columns:300px 1fr;gap:16px;padding:16px;max-width:1100px;margin:auto}
+@media(max-width:800px){.wrap{grid-template-columns:1fr}}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px}
+h2{font-size:.95rem;margin:0 0 10px;color:var(--y)}
+table{border-collapse:collapse;width:100%}td,th{padding:3px}
+input[type=number]{width:100%;background:var(--bg);color:var(--ink);border:1px solid var(--line);border-radius:6px;padding:5px;text-align:center;font:inherit}
+input[type=text]{width:100%;background:transparent;color:var(--mut);border:0;border-bottom:1px dashed var(--line);font:inherit;text-align:center}
+input[type=range]{width:100%;accent-color:var(--p)}
+button{background:var(--p);color:#1a1d29;border:0;border-radius:8px;padding:8px 12px;font:inherit;font-weight:700;cursor:pointer;margin:4px 4px 0 0}
+button.g{background:transparent;color:var(--t);border:1px solid var(--t)}
+button:focus-visible,input:focus-visible{outline:3px solid var(--y)}
+#mos{display:flex;height:300px;border-radius:8px;overflow:hidden;border:2px solid var(--line)}
+#mos .col{display:flex;flex-direction:column;border-right:2px solid var(--bg);transition:width .3s}
+#mos .seg{font-size:12px;font-weight:700;color:#10131c;padding:4px 6px;border-top:2px solid var(--bg);transition:height .3s;overflow:hidden}
+#labs{display:flex;margin-top:4px;color:var(--mut);font-size:13px}#labs div{text-align:center}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:8px;margin-top:12px}
+.stat{background:var(--bg);border-radius:8px;padding:8px 10px}.stat small{color:var(--mut);display:block}.stat b{font-size:1.25rem}
+.verdict{margin-top:12px;padding:10px 12px;border-radius:8px;font-weight:700}
+.ok{background:#17382f;color:var(--t)}.bad{background:#401f35;color:var(--p)}
+svg{width:100%;height:auto;display:block}
+.mut{color:var(--mut);font-size:13px}
+.res td{text-align:center;border-radius:6px;font-size:13px}
+</style></head><body>
+<header><h1>Independence Lab</h1><p>Drag the slider from the real data to perfect independence and watch χ² fall. Then test it by shuffling.</p></header>
+<div class="wrap">
+ <div>
+  <div class="panel" style="margin-bottom:16px"><h2>1. Raw data (X, F pairs)</h2>
+   <textarea id="raw" rows="6" style="width:100%;background:var(--bg);color:var(--ink);border:1px solid var(--line);border-radius:6px;padding:6px;font:13px monospace" placeholder="One pair per line, e.g.&#10;Never,A&#10;Often,C&#10;Sometimes,B"></textarea>
+   <label class="mut"><input type="checkbox" id="hdr"> first line is a header</label><br>
+   <button id="build">Build contingency table</button><button id="sample" class="g">Load Titanic data (2201 rows)</button>
+   <p class="mut" id="rawmsg">Separate X and F with a comma, semicolon or tab.</p></div>
+  <div class="panel"><h2>2. Contingency table (editable)</h2><div id="grid"></div>
+   <button id="rA" class="g">+ row</button><button id="rD" class="g">− row</button><button id="cA" class="g">+ col</button><button id="cD" class="g">− col</button><button id="reset" class="g">Reset to Titanic data</button>
+   <p class="mut">Default: Titanic, travel class (rows) vs survival (columns). Source: R datasets::Titanic, collapsed over sex and age (Dawson, 1995, JSE 3(3)).</p></div>
+  <div class="panel" style="margin-top:16px"><h2>Blend: observed → expected</h2>
+   <input id="blend" type="range" min="0" max="100" value="0"><div class="mut" id="bl">0% towards independence</div></div>
+ </div>
+ <div>
+  <div class="panel"><h2>Mosaic: P(column | row), widths = row sizes</h2><div id="mos"></div><div id="labs"></div>
+   <div class="stats" id="stats"></div><div id="verdict"></div></div>
+  <div class="panel" style="margin-top:16px"><h2>Shuffle test (Monte Carlo)</h2>
+   <p class="mut" style="margin-top:0">Shuffle the column labels at random 2000 times. Each shuffle is a world where independence is true. If the real χ² sits far in the tail, independence is unlikely.</p>
+   <button id="sim">Run 2000 shuffles</button><svg id="hist" viewBox="0 0 600 190"></svg><div id="simres" class="mut"></div></div>
+  <div class="panel" style="margin-top:16px"><h2>Standardized residuals (O−E)/√E</h2><div id="resid" class="res"></div>
+   <p class="mut">Pink: more than expected. Teal: fewer. Beyond ±2 is notable.</p></div>
+  <p class="mut">Association is not causation: χ² can only say the variables are related.</p>
+ </div>
+</div>
+<script>
+"use strict";
+let rl=["1st class","2nd class","3rd class","Crew"],cl=["Died","Survived"],O=[[122,203],[167,118],[528,178],[673,212]];
+const pal=["#4fd1c5","#9aa3bd","#ff7ab6","#f6c85f","#8fa8ff","#b6e36b"];
+const $=i=>document.getElementById(i),fx=(x,d=2)=>(+x).toFixed(d);
+function lg(x){const c=[76.18009172947146,-86.50532032941677,24.01409824083091,-1.231739572450155,.1208650973866179e-2,-.5395239384953e-5];let y=x,t=x+5.5;t-=(x+.5)*Math.log(t);let s=1.000000000190015;for(const k of c)s+=k/++y;return -t+Math.log(2.5066282746310005*s/x)}
+function Q(a,x){if(x<=0)return 1;if(x<a+1){let ap=a,s=1/a,d=s;for(let n=0;n<500;n++){ap++;d*=x/ap;s+=d;if(Math.abs(d)<Math.abs(s)*1e-14)break}return 1-s*Math.exp(-x+a*Math.log(x)-lg(a))}
+ let b=x+1-a,c=1e300,d=1/b,h=d;for(let i=1;i<500;i++){const an=-i*(i-a);b+=2;d=an*d+b;if(Math.abs(d)<1e-300)d=1e-300;c=b+an/c;if(Math.abs(c)<1e-300)c=1e-300;d=1/d;const l=d*c;h*=l;if(Math.abs(l-1)<1e-14)break}return Math.exp(-x+a*Math.log(x)-lg(a))*h}
+function crit(df){let lo=0,hi=500;for(let i=0;i<100;i++){const m=(lo+hi)/2;Q(df/2,m/2)>.05?lo=m:hi=m}return lo}
+const sums=M=>({r:M.map(x=>x.reduce((a,b)=>a+b,0)),c:M[0].map((_,j)=>M.reduce((a,r)=>a+r[j],0))});
+function expd(M){const {r,c}=sums(M),n=r.reduce((a,b)=>a+b,0);return r.map(a=>c.map(b=>a*b/n))}
+function chi(M){const E=expd(M);let s=0;M.forEach((r,i)=>r.forEach((o,j)=>s+=E[i][j]>0?(o-E[i][j])**2/E[i][j]:0));return s}
+function blended(){const t=$("blend").value/100,E=expd(O);return O.map((r,i)=>r.map((o,j)=>o*(1-t)+E[i][j]*t))}
+
+function grid(){let h="<table><tr><td></td>"+cl.map((c,j)=>`<td><input type=text class=cl value="${c}"></td>`).join("")+"</tr>";
+ rl.forEach((r,i)=>{h+=`<tr><td><input type=text class=rl value="${r}"></td>`+cl.map((_,j)=>`<td><input type=number min=0 id=o${i}_${j} value=${O[i][j]}></td>`).join("")+"</tr>"});
+ $("grid").innerHTML=h+"</table>";
+ document.querySelectorAll("#grid input").forEach(e=>e.oninput=()=>{read();draw()})}
+function read(){rl=[...document.querySelectorAll(".rl")].map(e=>e.value||"?");cl=[...document.querySelectorAll(".cl")].map(e=>e.value||"?");
+ O=rl.map((_,i)=>cl.map((_,j)=>Math.max(0,+$(`o${i}_${j}`).value||0)))}
+
+function draw(){
+ const M=blended(),{r,c}=sums(M),n=r.reduce((a,b)=>a+b,0);
+ if(!n||r.some(x=>x<=0)||c.some(x=>x<=0)){$("stats").innerHTML="<p class=mut>Each row and column needs at least one count.</p>";return}
+ $("bl").textContent=$("blend").value+"% towards independence";
+ $("mos").innerHTML=M.map((row,i)=>`<div class=col style="width:${r[i]/n*100}%">`+row.map((v,j)=>`<div class=seg style="height:${v/r[i]*100}%;background:${pal[j%6]}">${v/r[i]>.1?cl[j]+" "+fx(v/r[i]*100,0)+"%":""}</div>`).join("")+"</div>").join("");
+ $("labs").innerHTML=rl.map((x,i)=>`<div style="width:${r[i]/n*100}%">${x}</div>`).join("");
+ const x2=chi(M),df=(rl.length-1)*(cl.length-1),p=Q(df/2,x2/2),cv=crit(df),V=Math.sqrt(x2/(n*Math.min(rl.length-1,cl.length-1)));
+ $("stats").innerHTML=[["χ²",fx(x2)],["df",df],["critical (5%)",fx(cv)],["p-value",p<1e-4?p.toExponential(1):fx(p,4)],["Cramér's V",fx(V,3)]].map(a=>`<div class=stat><small>${a[0]}</small><b>${a[1]}</b></div>`).join("");
+ $("verdict").innerHTML=x2>cv?`<div class="verdict bad">χ² above critical value: dependent (reject H₀)</div>`:`<div class="verdict ok">χ² below critical value: no evidence against independence</div>`;
+ const E=expd(M);
+ $("resid").innerHTML="<table><tr><td></td>"+cl.map(c=>`<td>${c}</td>`).join("")+"</tr>"+M.map((row,i)=>`<tr><td>${rl[i]}</td>`+row.map((o,j)=>{const z=(o-E[i][j])/Math.sqrt(E[i][j]),a=Math.min(.9,Math.abs(z)/3);
+  return `<td style="background:${z>0?`rgba(255,122,182,${a})`:`rgba(79,209,197,${a})`}">${z>0?"+":""}${fx(z)}</td>`}).join("")+"</tr>").join("")+"</table>";
+ $("simres").textContent="";$("hist").innerHTML="";window._obs=chi(O);
+}
+
+/* Monte Carlo shuffle test on the observed table */
+function simulate(){
+ const R=rl.length,C=cl.length,rows=[],cols=[];
+ O.forEach((r,i)=>r.forEach((o,j)=>{for(let k=0;k<o;k++){rows.push(i);cols.push(j)}}));
+ const n=rows.length,obs=chi(O),B=2000,res=[];let ge=0;
+ for(let b=0;b<B;b++){
+  for(let i=n-1;i>0;i--){const k=Math.floor(Math.random()*(i+1));[cols[i],cols[k]]=[cols[k],cols[i]]}
+  const T=Array.from({length:R},()=>Array(C).fill(0));for(let i=0;i<n;i++)T[rows[i]][cols[i]]++;
+  const s=chi(T);res.push(s);if(s>=obs)ge++}
+ const mx=Math.max(obs*1.15,...res),bins=30,h=Array(bins).fill(0);res.forEach(v=>h[Math.min(bins-1,Math.floor(v/mx*bins))]++);
+ const hm=Math.max(...h),w=600/bins;
+ let s=h.map((v,i)=>`<rect x="${i*w+1}" y="${170-v/hm*160}" width="${w-2}" height="${v/hm*160}" fill="${(i+.5)/bins*mx>=obs?'#ff7ab6':'#4fd1c5'}" opacity=".85"/>`).join("");
+ const ox=Math.min(598,obs/mx*600);
+ s+=`<line x1="${ox}" x2="${ox}" y1="5" y2="170" stroke="#f6c85f" stroke-width="2" stroke-dasharray="5 3"/><text x="${Math.min(ox+4,470)}" y="16" fill="#f6c85f" font-size="12">observed χ² = ${fx(obs)}</text><text x="2" y="186" fill="#9aa3bd" font-size="11">0</text><text x="560" y="186" fill="#9aa3bd" font-size="11">${fx(mx,0)}</text>`;
+ $("hist").innerHTML=s;
+ $("simres").textContent=`${ge} of ${B} shuffles gave χ² at least as large as observed, so the simulated p ≈ ${fx((ge+1)/(B+1),4)}. Compare with the theoretical p-value above at 0% blend.`;
+}
+$("sim").onclick=()=>{$("blend").value=0;draw();simulate()};
+$("blend").oninput=draw;
+$("rA").onclick=()=>{read();rl.push("Row "+(rl.length+1));O.push(cl.map(()=>10));grid();draw()};
+$("rD").onclick=()=>{if(rl.length>2){read();rl.pop();O.pop();grid();draw()}};
+$("cA").onclick=()=>{read();cl.push("Col "+(cl.length+1));O.forEach(r=>r.push(10));grid();draw()};
+$("cD").onclick=()=>{if(cl.length>2){read();cl.pop();O.forEach(r=>r.pop());grid();draw()}};
+
+/* ---- raw data -> contingency table ---- */
+function buildFromRaw(){
+ let lines=$("raw").value.split(/\r?\n/).map(l=>l.trim()).filter(Boolean);
+ if($("hdr").checked)lines.shift();
+ const xs=[],fs=[],cnt={};
+ for(const l of lines){const p=l.split(/[,;\t]/).map(v=>v.trim());if(p.length<2||!p[0]||!p[1])continue;
+  if(!xs.includes(p[0]))xs.push(p[0]);if(!fs.includes(p[1]))fs.push(p[1]);cnt[p[0]+"\u0001"+p[1]]=(cnt[p[0]+"\u0001"+p[1]]||0)+1}
+ if(xs.length<2||fs.length<2){$("rawmsg").textContent="Need at least 2 different X values and 2 different F values.";return}
+ if(xs.length>8||fs.length>8){$("rawmsg").textContent="Too many categories (max 8 each). Group the values first.";return}
+ rl=xs;cl=fs;O=xs.map(x=>fs.map(f=>cnt[x+"\u0001"+f]||0));
+ $("blend").value=0;grid();draw();
+ $("rawmsg").textContent=`Read ${lines.length} rows: ${xs.length} X categories × ${fs.length} F categories.`}
+$("build").onclick=buildFromRaw;
+$("sample").onclick=()=>{const L=[];O.forEach((r,i)=>r.forEach((o,j)=>{for(let k=0;k<o;k++)L.push(rl[i]+","+cl[j])}));
+ for(let i=L.length-1;i>0;i--){const k=Math.floor(Math.random()*(i+1));[L[i],L[k]]=[L[k],L[i]]}
+ $("raw").value=L.join("\n");buildFromRaw()};
+$("reset").onclick=()=>{rl=["1st class","2nd class","3rd class","Crew"];cl=["Died","Survived"];O=[[122,203],[167,118],[528,178],[673,212]];
+ $("blend").value=0;$("raw").value="";$("rawmsg").textContent="Table reset to the Titanic data.";grid();draw()};
+grid();draw();
+</script></body></html>
